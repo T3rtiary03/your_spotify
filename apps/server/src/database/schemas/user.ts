@@ -12,6 +12,7 @@ export interface User {
   refreshToken: string | null;
   lastTimestamp: number;
   tracks: Schema.Types.ObjectId[];
+  episodes: Schema.Types.ObjectId[];
   settings: {
     historyLine: boolean;
     preferredStatsPeriod: string;
@@ -37,6 +38,12 @@ export const UserSchema = new Schema<User>(
     refreshToken: { type: String, default: null },
     lastTimestamp: { type: Number, default: 0 },
     tracks: {
+      type: [Schema.Types.ObjectId],
+      ref: "Infos",
+      select: false,
+      default: [],
+    },
+    episodes: {
       type: [Schema.Types.ObjectId],
       ref: "Infos",
       select: false,

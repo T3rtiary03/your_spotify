@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
-import { TrackModel, AlbumModel, ArtistModel } from "../database/Models";
+import {
+  TrackModel,
+  AlbumModel,
+  ArtistModel,
+  ShowModel,
+  EpisodeModel,
+} from "../database/Models";
 import { SpotifyAlbum, Album } from "../database/schemas/album";
 import { SpotifyArtist, Artist } from "../database/schemas/artist";
 import { SpotifyTrack, Track } from "../database/schemas/track";
@@ -7,16 +13,18 @@ import { logger } from "../tools/logger";
 import { minOfArray, retryPromise, uniqBy } from "../tools/misc";
 import { SpotifyAPI } from "../tools/apis/spotifyApi";
 import {
-  addTrackIdsToUser,
+  addListenInfosToUser,
   storeInUser,
   storeFirstListenedAtIfLess,
 } from "../database";
 import { Infos } from "../database/schemas/info";
 import { longWriteDbLock } from "../tools/lock";
 import { Metrics } from "../tools/metrics";
+import { Episode, SpotifyEpisode } from "../database/schemas/episode";
+import { Show, SpotifyShow } from "../database/schemas/show";
 
 const getIdsHandlingMax = async <
-  T extends SpotifyTrack | SpotifyAlbum | SpotifyArtist,
+  T extends SpotifyTrack | SpotifyAlbum | SpotifyArtist | SpotifyShow | SpotifyEpisode,
 >(
   userId: string,
   url: string,
@@ -119,6 +127,54 @@ export const getArtists = async (userId: string, ids: string[]) => {
   return artists;
 };
 
+const showUrl = "https://api.spotify.com/v1/shows";
+
+export const getShows = async (userId: string, ids: string[]) => {
+  const spotifyShows = await getIdsHandlingMax<SpotifyShow>(
+    userId,
+    showUrl,
+    ids,
+    50,
+    "shows",
+  );
+
+  const shows: Show[] = spotifyShows.map(show => {
+    logger.info(`Storing non existing show ${show.name} by ${show.publisher}`);
+
+    return {
+      ...show,
+    };
+  });
+  // Metrics.ingestedShowsTotal.inc({ user: userId }, shows.length);
+
+  return shows;
+};
+
+const episodeUrl = "https://api.spotify.com/v1/episodes";
+
+export const getEpisodes = async (userId: string, ids: string[]) => {
+  const spotifyEpisodes = await getIdsHandlingMax<SpotifyEpisode>(
+    userId,
+    episodeUrl,
+    ids,
+    50,
+    "episodes",
+  );
+
+  const episodes = spotifyEpisodes.map<Episode>(episode => {
+    logger.info(
+      `Storing non existing episode ${episode.name} from ${episode.show?.name}`,
+    );
+    return {
+      ...episode,
+      show: episode.show.id,
+    };
+  });
+  // Metrics.ingestedEpisodesTotal.inc({ user: userId }, episodes.length);
+
+  return episodes;
+};
+
 const getTracksAndRelatedAlbumArtists = async (
   userId: string,
   ids: string[],
@@ -185,14 +241,57 @@ export const getTracksAlbumsArtists = async (
   };
 };
 
-export async function storeTrackAlbumArtist({
+export const getEpisodesShows = async (
+  userId: string,
+  spotifyEpisodes: SpotifyEpisode[],
+) => {
+  const ids = spotifyEpisodes.map(episode => episode.id);
+  const storedEpisodes: Episode[] = await EpisodeModel.find({
+    id: { $in: ids },
+  });
+  const missingEpisodeIds = ids.filter(
+    id => !storedEpisodes.find(stored => stored.id.toString() === id.toString()),
+  );
+
+  if (missingEpisodeIds.length === 0) {
+    logger.info("No missing episodes, passing...");
+    return {
+      episodes: [],
+      shows: [],
+    };
+  }
+
+  const episodes = await getEpisodes(userId, missingEpisodeIds);
+  const relatedShowIds = [...new Set(episodes.map(e => e.show))];
+
+  const storedShows: Show[] = await ShowModel.find({
+    id: { $in: relatedShowIds },
+  });
+  const missingShowIds = relatedShowIds.filter(
+    showId => !storedShows.find(sShow => sShow.id.toString() === showId.toString()),
+  );
+
+  const shows =
+    missingShowIds.length > 0 ? await getShows(userId, missingShowIds) : [];
+
+  return {
+    episodes,
+    shows,
+  };
+};
+
+export async function storeMissingItems({
   tracks,
   albums,
   artists,
+  shows,
+  episodes,
 }: {
   tracks?: Track[];
   albums?: Album[];
   artists?: Artist[];
+  shows?: Show[];
+  episodes?: Episode[];
 }) {
   if (tracks) {
     await TrackModel.create(uniqBy(tracks, item => item.id));
@@ -203,6 +302,12 @@ export async function storeTrackAlbumArtist({
   if (artists) {
     await ArtistModel.create(uniqBy(artists, item => item.id));
   }
+  if (shows) {
+    await ShowModel.create(uniqBy(shows, item => item.id));
+  }
+  if (episodes) {
+    await EpisodeModel.create(uniqBy(episodes, item => item.id));
+  }
 }
 
 export async function storeIterationOfLoop(
@@ -211,17 +316,21 @@ export async function storeIterationOfLoop(
   tracks: Track[],
   albums: Album[],
   artists: Artist[],
+  shows: Show[],
+  episodes: Episode[],
   infos: Omit<Infos, "owner">[],
 ) {
   await longWriteDbLock.lock();
 
-  await storeTrackAlbumArtist({
+  await storeMissingItems({
     tracks,
     albums,
     artists,
+    shows,
+    episodes,
   });
 
-  await addTrackIdsToUser(userId, infos);
+  await addListenInfosToUser(userId, infos);
 
   await storeInUser("_id", new mongoose.Types.ObjectId(userId), {
     lastTimestamp: iterationTimestamp,

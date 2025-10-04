@@ -101,7 +101,7 @@ export const changeSetting = <F extends keyof User>(
   );
 };
 
-export const addTrackIdsToUser = async (
+export const addListenInfosToUser = async (
   id: string,
   infos: Omit<Infos, "owner">[],
 ) => {
@@ -110,8 +110,33 @@ export const addTrackIdsToUser = async (
     owner: new Types.ObjectId(id),
   }));
   const infosSaved = await InfosModel.create(realInfos);
+
+  const trackInfoIds = infosSaved
+    .filter(info => info.type === "track")
+    .map(e => e._id);
+  const episodeInfoIds = infosSaved
+    .filter(info => info.type === "episode")
+    .map(e => e._id);
+
+  const toPush: {
+    tracks?: { $each: Types.ObjectId[] };
+    episodes?: { $each: Types.ObjectId[] };
+  } = {};
+
+  if (trackInfoIds.length > 0) {
+    toPush.tracks = { $each: trackInfoIds };
+  }
+  if (episodeInfoIds.length > 0) {
+    toPush.episodes = { $each: episodeInfoIds };
+  }
+
+  if (Object.keys(toPush).length === 0) {
+    return;
+  }
+
+  // eslint-disable-next-line consistent-return
   return UserModel.findByIdAndUpdate(id, {
-    $push: { tracks: { $each: infosSaved.map(e => e._id) } },
+    $push: toPush,
   });
 };
 

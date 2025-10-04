@@ -2,15 +2,33 @@
 import { MongoServerSelectionError } from "mongodb";
 import { AxiosError } from "axios";
 import { getCloseTrackId, getUser, getUserCount } from "../database";
-import { RecentlyPlayedTrack } from "../database/schemas/track";
+import {
+  RecentlyPlayedTrack,
+  SpotifyTrack,
+} from "../database/schemas/track";
 import { User } from "../database/schemas/user";
 import { logger } from "../tools/logger";
 import { retryPromise, wait } from "../tools/misc";
 import { SpotifyAPI } from "../tools/apis/spotifyApi";
 import { Infos } from "../database/schemas/info";
-import { getTracksAlbumsArtists, storeIterationOfLoop } from "./dbTools";
+import {
+  getEpisodesShows,
+  getTracksAlbumsArtists,
+  storeIterationOfLoop,
+} from "./dbTools";
+import { SpotifyEpisode } from "../database/schemas/episode";
 
 const RETRY = 10;
+
+interface RecentlyPlayed {
+  track: SpotifyTrack;
+  played_at: string;
+}
+
+interface RecentlyPlayedEpisode {
+  track: SpotifyEpisode;
+  played_at: string;
+}
 
 const loop = async (user: User) => {
   logger.info(`[${user.username}]: refreshing...`);
@@ -24,10 +42,10 @@ const loop = async (user: User) => {
 
   const url = `/me/player/recently-played?after=${
     user.lastTimestamp - 1000 * 60 * 60 * 2
-  }`;
+  }&types=track,episode`;
   const spotifyApi = new SpotifyAPI(user._id.toString());
 
-  const items: RecentlyPlayedTrack[] = [];
+  const items: (RecentlyPlayedTrack | RecentlyPlayedEpisode)[] = [];
   let nextUrl = url;
 
   do {
@@ -49,11 +67,22 @@ const loop = async (user: User) => {
     return;
   }
 
-  const spotifyTracks = items.map(e => e.track);
+  const spotifyTracks = items
+    .filter(e => "artists" in e.track)
+    .map(e => e.track) as SpotifyTrack[];
+  const spotifyEpisodes = items
+    .filter(e => !("artists" in e.track))
+    .map(e => e.track) as SpotifyEpisode[];
+
   const { tracks, albums, artists } = await getTracksAlbumsArtists(
     user._id.toString(),
     spotifyTracks,
   );
+  const { shows, episodes } = await getEpisodesShows(
+    user._id.toString(),
+    spotifyEpisodes,
+  );
+
   const infos: Omit<Infos, "owner">[] = [];
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i]!;
@@ -65,22 +94,33 @@ const loop = async (user: User) => {
       30,
     );
     if (duplicate.length === 0) {
-      const isBlacklisted = user.settings.blacklistedArtists.find(
-        a => a === item.track.artists[0]?.id,
-      );
-      const [primaryArtist] = item.track.artists;
-      if (!primaryArtist) {
-        continue;
+      if ("artists" in item.track) {
+        const isBlacklisted = user.settings.blacklistedArtists.find(
+          a => a === item.track.artists[0]?.id,
+        );
+        const [primaryArtist] = item.track.artists;
+        if (!primaryArtist) {
+          continue;
+        }
+        infos.push({
+          played_at: new Date(item.played_at),
+          durationMs: item.track.duration_ms,
+          albumId: item.track.album.id,
+          primaryArtistId: primaryArtist.id,
+          artistIds: item.track.artists.map(e => e.id),
+          id: item.track.id,
+          type: "track",
+          ...(isBlacklisted ? { blacklistedBy: "artist" } : {}),
+        });
+      } else {
+        infos.push({
+          played_at: new Date(item.played_at),
+          durationMs: item.track.duration_ms,
+          id: item.track.id,
+          type: "episode",
+          showId: item.track.show.id,
+        });
       }
-      infos.push({
-        played_at: new Date(item.played_at),
-        durationMs: item.track.duration_ms,
-        albumId: item.track.album.id,
-        primaryArtistId: primaryArtist.id,
-        artistIds: item.track.artists.map(e => e.id),
-        id: item.track.id,
-        ...(isBlacklisted ? { blacklistedBy: "artist" } : {}),
-      });
     }
   }
   await storeIterationOfLoop(
@@ -89,10 +129,12 @@ const loop = async (user: User) => {
     tracks,
     albums,
     artists,
+    shows,
+    episodes,
     infos,
   );
   logger.info(
-    `[${user.username}]: ${tracks.length} tracks, ${albums.length} albums, ${artists.length} artists`,
+    `[${user.username}]: ${tracks.length} tracks, ${albums.length} albums, ${artists.length} artists, ${shows.length} shows, ${episodes.length} episodes`,
   );
 };
 

@@ -7,7 +7,9 @@ import { InfosSchema } from "./schemas/info";
 import { MigrationSchema } from "./schemas/migration";
 import { TrackSchema } from "./schemas/track";
 import { UserSchema } from "./schemas/user";
+import { EpisodeSchema } from "./schemas/episode";
 import { PrivateDataSchema } from "./schemas/privateData";
+import { ShowSchema } from "./schemas/show";
 
 export const UserModel = model("User", UserSchema);
 export const InfosModel = model("Infos", InfosSchema);
@@ -21,3 +23,5 @@ export const GlobalPreferencesModel = model(
 );
 export const ImporterStateModel = model("ImporterState", ImporterStateSchema);
 export const PrivateDataModel = model("PrivateData", PrivateDataSchema);
+export const ShowModel = model("Show", ShowSchema);
+export const EpisodeModel = model("Episode", EpisodeSchema);
