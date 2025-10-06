@@ -16,6 +16,7 @@ It's composed of a web server which polls the Spotify API every now and then and
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
   - [Using docker](#using-docker-compose)
+  - [Building the container](#building-the-container)
   - [Installing locally](#installing-locally-not-recommended)
   - [Environment](#environment)
   - [Advanced CORS settings](#advanced-cors-settings)
@@ -77,6 +78,16 @@ services:
 
 > Some ARM-based devices might have trouble with Mongo >= 5. I suggest you use the image **mongo:4.4**.
 
+## Building the container
+
+If you wish to build the container yourself, you can do so by running the `build.sh` script.
+
+```sh
+./build.sh
+```
+
+This will build the `yooooomi/your_spotify_client` and `yooooomi/your_spotify_server` images.
+
 ## Installing locally (not recommended)
 
 You can follow the instructions [here](https://github.com/Yooooomi/your_spotify/blob/master/LOCAL_INSTALL.md). Note that you will still have to do the steps below.
@@ -103,7 +114,7 @@ You can follow the instructions [here](https://github.com/Yooooomi/your_spotify/
 
 ## Advanced CORS settings
 
-**Manually specifying CORS configuration is not required for typical deployments.**  
+**Manually specifying CORS configuration is not required for typical deployments.**
 99.9% of users do not need to worry about this, it is handled automatically.
 
 If your use case requires the backend to be used from multiple frontend origins, you can manually adjust the `CORS` variable.
